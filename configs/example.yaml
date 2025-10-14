@@ -1,0 +1,44 @@
+# Example configuration for the QUIC Reverse Proxy
+
+server:
+  # The address and port on which the proxy will listen for incoming QUIC connections
+  address: ":443"
+  # The path to the TLS certificate file
+  cert_file: "/path/to/cert.pem"
+  # The path to the TLS key file
+  key_file: "/path/to/key.pem"
+
+# Backend services configuration
+backends:
+  - name: "service1"
+    url: "https://backend1.example.com"
+    weight: 1
+  - name: "service2"
+    url: "https://backend2.example.com"
+    weight: 2
+
+# Telemetry settings
+telemetry:
+  # Enable or disable telemetry collection
+  enabled: true
+  # The address for the metrics endpoint
+  metrics_address: ":9090"
+  # The tracing provider (e.g., "jaeger", "zipkin")
+  tracing_provider: "jaeger"
+  # The sampling rate for tracing
+  sampling_rate: 0.1
+
+# Rate limiting settings
+rate_limit:
+  # Maximum number of requests per minute
+  max_requests_per_minute: 100
+
+# CORS settings
+cors:
+  # Allow all origins
+  allow_all_origins: true
+  # Allowed methods
+  allowed_methods:
+    - "GET"
+    - "POST"
+    - "OPTIONS"

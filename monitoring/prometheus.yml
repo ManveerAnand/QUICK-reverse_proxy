@@ -1,0 +1,59 @@
+# Prometheus configuration for QUIC Reverse Proxy
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "quic-proxy"
+    env: "development"
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  # QUIC Reverse Proxy metrics
+  - job_name: "quic-proxy"
+    static_configs:
+      - targets: ["quic-proxy:9090"]
+    scrape_interval: 10s
+    metrics_path: "/metrics"
+    scheme: "http"
+
+  # Prometheus itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+    scrape_interval: 30s
+
+  # Backend services
+  - job_name: "backend1"
+    static_configs:
+      - targets: ["backend1:80"]
+    scrape_interval: 15s
+    metrics_path: "/metrics"
+    scheme: "http"
+
+  - job_name: "backend2"
+    static_configs:
+      - targets: ["backend2:3000"]
+    scrape_interval: 15s
+    metrics_path: "/metrics"
+    scheme: "http"
+
+  # Node exporter for system metrics (if available)
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+    scrape_interval: 15s
+
+  # Container metrics via cAdvisor (if available)
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    scrape_interval: 15s
+    metrics_path: "/metrics"

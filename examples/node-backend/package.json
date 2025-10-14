@@ -1,0 +1,16 @@
+{
+  "name": "quic-proxy-backend",
+  "version": "1.0.0",
+  "description": "Example backend service for QUIC reverse proxy testing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": ["backend", "quic", "proxy", "demo"],
+  "author": "QUIC Proxy Demo",
+  "license": "MIT",
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

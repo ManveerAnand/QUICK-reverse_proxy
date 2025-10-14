@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quic-reverse-proxy
+  labels:
+    app: quic-reverse-proxy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: quic-reverse-proxy
+  template:
+    metadata:
+      labels:
+        app: quic-reverse-proxy
+    spec:
+      containers:
+      - name: quic-reverse-proxy
+        image: your-docker-repo/quic-reverse-proxy:latest
+        ports:
+        - containerPort: 443
+        env:
+        - name: CONFIG_PATH
+          value: "/etc/proxy/proxy.yaml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/proxy
+      volumes:
+      - name: config-volume
+        configMap:
+          name: quic-reverse-proxy-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quic-reverse-proxy-config
+data:
+  proxy.yaml: |
+    server:
+      address: ":443"
+      backend:
+        - url: "http://backend-service-1"
+        - url: "http://backend-service-2"
+    telemetry:
+      enabled: true
+      prometheus:
+        endpoint: "/metrics"

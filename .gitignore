@@ -1,0 +1,55 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+build/
+!build/.gitkeep
+
+# Go
+*.test
+*.out
+vendor/
+go.work
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Certificates (keep example, ignore actual)
+certs/*.crt
+certs/*.key
+certs/*.pem
+!certs/.gitkeep
+
+# Configuration (keep examples)
+*.local.yaml
+*.local.yml
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Docker
+.env.local
+
+# Air (hot reload)
+tmp/

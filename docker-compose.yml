@@ -1,0 +1,162 @@
+# Docker Compose for QUIC Reverse Proxy Development Environment
+
+version: '3.8'
+
+services:
+  # QUIC Reverse Proxy
+  quic-proxy:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    container_name: quic-reverse-proxy
+    ports:
+      - "443:443/udp"    # QUIC/HTTP3 proxy
+      - "9090:9090/tcp"  # Metrics
+      - "8080:8080/tcp"  # Health check
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./certs:/app/certs:ro
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=info
+    depends_on:
+      - backend1
+      - backend2
+      - prometheus
+      - jaeger
+    networks:
+      - proxy-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Backend Service 1 (Example Go HTTP server)
+  backend1:
+    image: nginx:alpine
+    container_name: backend1
+    ports:
+      - "8080:80"
+    volumes:
+      - ./www:/usr/share/nginx/html:ro
+    networks:
+      - proxy-network
+    environment:
+      - SERVER_NAME=backend1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Backend Service 2 (Example Node.js server)
+  backend2:
+    image: node:18-alpine
+    container_name: backend2
+    ports:
+      - "8081:3000"
+    working_dir: /app
+    volumes:
+      - ./examples/node-backend:/app
+    command: ["node", "server.js"]
+    networks:
+      - proxy-network
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    networks:
+      - proxy-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
+      - "14250:14250"  # gRPC collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - COLLECTOR_ZIPKIN_HOST_PORT=9411
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - proxy-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  proxy-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

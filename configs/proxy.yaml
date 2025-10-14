@@ -1,0 +1,63 @@
+server:
+  address: ":443"
+  cert_file: "certs/server.crt"
+  key_file: "certs/server.key"
+  fallback_address: ":80"
+  quic:
+    max_streams: 1000
+    idle_timeout: "30s"
+    keep_alive: "15s"
+    enable_0rtt: true
+    max_token_age: "24h"
+    congestion_algorithm: "cubic"
+
+backends:
+  - name: "api-service"
+    targets:
+      - "http://localhost:8080"
+      - "http://localhost:8081"
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "10s"
+      timeout: "5s"
+      healthy_threshold: 2
+      unhealthy_threshold: 3
+    load_balancer: "round_robin"
+    weight: 1
+    timeout: "10s"
+    retry_count: 3
+
+  - name: "web-service"
+    targets:
+      - "http://localhost:3000"
+      - "http://localhost:3001"
+    health_check:
+      enabled: true
+      path: "/ping"
+      interval: "15s"
+      timeout: "3s"
+      healthy_threshold: 2
+      unhealthy_threshold: 3
+    load_balancer: "least_connections"
+    weight: 2
+    timeout: "15s"
+    retry_count: 2
+
+telemetry:
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+    collection_interval: "15s"
+
+  tracing:
+    enabled: true
+    endpoint: "http://localhost:14268/api/traces"
+    service_name: "quic-reverse-proxy"
+    sample_rate: 0.1
+
+  logging:
+    level: "info"
+    format: "json"
+    output: "stdout"

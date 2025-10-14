@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: quic-reverse-proxy
+  labels:
+    app: quic-reverse-proxy
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: 443
+      protocol: TCP
+      name: https
+  selector:
+    app: quic-reverse-proxy
