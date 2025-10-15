@@ -116,6 +116,12 @@ telemetry:
 
 ## Architecture
 
+![QUIC Reverse Proxy Architecture](arch_os.png)
+
+### Overview
+
+The QUIC Reverse Proxy architecture consists of multiple layers working together to provide high-performance, secure HTTP/3 connectivity:
+
 ```
 Client (HTTP/3) → QUIC Proxy → Load Balancer → Backend Services
                       ↓
@@ -125,7 +131,7 @@ Client (HTTP/3) → QUIC Proxy → Load Balancer → Backend Services
                  └── Structured Logs
 ```
 
-### Components
+### Key Components
 
 - **QUIC Server**: Handles HTTP/3 connections with TLS 1.3
 - **Load Balancer**: Distributes requests across backends
