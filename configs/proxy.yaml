@@ -14,11 +14,11 @@ server:
 backends:
   - name: "api-service"
     targets:
-      - "http://localhost:8080"
-      - "http://localhost:8081"
+      - "http://backend1:80"
+      - "http://backend2:3000"
     health_check:
-      enabled: true
-      path: "/health"
+      enabled: false
+      path: "/"
       interval: "10s"
       timeout: "5s"
       healthy_threshold: 2
@@ -30,19 +30,54 @@ backends:
 
   - name: "web-service"
     targets:
-      - "http://localhost:3000"
-      - "http://localhost:3001"
+      - "http://backend1:80"
     health_check:
-      enabled: true
-      path: "/ping"
+      enabled: false
+      path: "/"
       interval: "15s"
       timeout: "3s"
       healthy_threshold: 2
       unhealthy_threshold: 3
-    load_balancer: "least_connections"
+    load_balancer: "round_robin"
     weight: 2
     timeout: "15s"
     retry_count: 2
+
+routing:
+  default_backend: "api-service"
+  rules:
+    # API routes - goes to api-service (alternates between backend1:80 and backend2:3000)
+    - path: "/api/*"
+      backend: "api-service"
+      priority: 100
+      strip_prefix: false
+      methods: ["GET", "POST", "PUT", "DELETE"]
+
+    # Health check routes
+    - path: "/health"
+      backend: "api-service"
+      priority: 90
+
+    # Metrics route
+    - path: "/metrics"
+      backend: "api-service"
+      priority: 90
+
+    # Web routes - goes to web-service (only backend1:80)
+    - path: "/web/*"
+      backend: "web-service"
+      priority: 80
+      strip_prefix: true
+
+    # Static files
+    - path: "/static/*"
+      backend: "web-service"
+      priority: 70
+
+    # Default catch-all route (lowest priority)
+    - path: "/*"
+      backend: "api-service"
+      priority: 1
 
 telemetry:
   metrics:

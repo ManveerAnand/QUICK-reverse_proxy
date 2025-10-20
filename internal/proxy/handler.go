@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -13,13 +14,15 @@ import (
 
 // Handler handles HTTP requests and forwards them to backend services
 type Handler struct {
+	router       *Router
 	loadBalancer *LoadBalancer
 	metrics      *telemetry.Metrics
 }
 
 // NewHandler creates a new proxy handler
-func NewHandler(loadBalancer *LoadBalancer, metrics *telemetry.Metrics) *Handler {
+func NewHandler(router *Router, loadBalancer *LoadBalancer, metrics *telemetry.Metrics) *Handler {
 	return &Handler{
+		router:       router,
 		loadBalancer: loadBalancer,
 		metrics:      metrics,
 	}
@@ -29,8 +32,25 @@ func NewHandler(loadBalancer *LoadBalancer, metrics *telemetry.Metrics) *Handler
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// Get a backend from the load balancer
-	backend := h.loadBalancer.GetBackend(r)
+	// Route the request to find the appropriate backend config
+	backendConfig, err := h.router.Route(r)
+	if err != nil {
+		h.handleError(w, r, fmt.Sprintf("routing error: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Check if we should strip the path prefix
+	shouldStrip, prefix := h.router.ShouldStripPrefix(r)
+	if shouldStrip && prefix != "" {
+		// Strip the prefix from the path
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
+		if r.URL.Path == "" {
+			r.URL.Path = "/"
+		}
+	}
+
+	// Get a healthy backend from the load balancer for this backend config
+	backend := h.loadBalancer.GetBackendForConfig(backendConfig.Name)
 	if backend == nil {
 		h.handleError(w, r, "no healthy backends available", http.StatusServiceUnavailable)
 		return

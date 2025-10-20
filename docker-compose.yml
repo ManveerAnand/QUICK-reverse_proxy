@@ -11,8 +11,9 @@ services:
     container_name: quic-reverse-proxy
     ports:
       - "443:443/udp"    # QUIC/HTTP3 proxy
+      - "80:80/tcp"      # HTTP fallback (for testing)
       - "9090:9090/tcp"  # Metrics
-      - "8080:8080/tcp"  # Health check
+      - "8888:8080/tcp"  # Health check (changed from 8080)
     volumes:
       - ./configs:/app/configs:ro
       - ./certs:/app/certs:ro

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/os-dev/quic-reverse-proxy/internal/config"
@@ -15,6 +16,8 @@ import (
 type Server struct {
 	config       *config.Config
 	quicServer   *quic.Server
+	httpServer   *http.Server
+	router       *Router
 	handler      *Handler
 	telemetry    *telemetry.Manager
 	loadBalancer *LoadBalancer
@@ -22,14 +25,20 @@ type Server struct {
 
 // NewServer creates a new reverse proxy server
 func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server, error) {
+	// Create router
+	router, err := NewRouter(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create router: %w", err)
+	}
+
 	// Create load balancer
 	loadBalancer, err := NewLoadBalancer(cfg.Backends)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create load balancer: %w", err)
 	}
 
-	// Create proxy handler
-	handler := NewHandler(loadBalancer, telemetryManager.GetMetrics())
+	// Create proxy handler with router
+	handler := NewHandler(router, loadBalancer, telemetryManager.GetMetrics())
 
 	// Create QUIC server
 	quicServer, err := quic.NewServer(cfg.Server, telemetryManager.GetMetrics())
@@ -37,9 +46,20 @@ func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server
 		return nil, fmt.Errorf("failed to create QUIC server: %w", err)
 	}
 
+	// Create HTTP fallback server (for testing and compatibility)
+	httpServer := &http.Server{
+		Addr:         cfg.Server.FallbackAddress,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	return &Server{
 		config:       cfg,
 		quicServer:   quicServer,
+		httpServer:   httpServer,
+		router:       router,
 		handler:      handler,
 		telemetry:    telemetryManager,
 		loadBalancer: loadBalancer,
@@ -56,6 +76,16 @@ func (s *Server) Start() error {
 		"backends": len(s.config.Backends),
 	}).Info("Starting reverse proxy server")
 
+	// Start HTTP fallback server in a goroutine
+	if s.httpServer != nil {
+		go func() {
+			logrus.WithField("address", s.httpServer.Addr).Info("Starting HTTP fallback server")
+			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logrus.WithError(err).Error("HTTP fallback server error")
+			}
+		}()
+	}
+
 	// Start the QUIC server with our handler
 	return s.quicServer.Start(s.handler)
 }
@@ -66,6 +96,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	// Stop health checks
 	s.loadBalancer.StopHealthChecks()
+
+	// Shutdown HTTP fallback server
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			logrus.WithError(err).Error("Failed to shutdown HTTP fallback server")
+		}
+	}
 
 	// Shutdown QUIC server
 	return s.quicServer.Shutdown(ctx)

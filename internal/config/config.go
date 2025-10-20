@@ -169,10 +169,18 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("at least one backend must be configured")
 	}
 
+	backendNames := make(map[string]bool)
 	for i, backend := range cfg.Backends {
 		if backend.Name == "" {
 			return fmt.Errorf("backend[%d].name is required", i)
 		}
+
+		// Check for duplicate backend names
+		if backendNames[backend.Name] {
+			return fmt.Errorf("duplicate backend name: %s", backend.Name)
+		}
+		backendNames[backend.Name] = true
+
 		if len(backend.Targets) == 0 {
 			return fmt.Errorf("backend[%d].targets cannot be empty", i)
 		}
@@ -194,6 +202,25 @@ func validate(cfg *Config) error {
 		}
 		if backend.RetryCount < 0 {
 			return fmt.Errorf("backend[%d].retry_count cannot be negative", i)
+		}
+	}
+
+	// Validate routing configuration
+	if cfg.Routing.DefaultBackend != "" {
+		if !backendNames[cfg.Routing.DefaultBackend] {
+			return fmt.Errorf("default backend not found: %s", cfg.Routing.DefaultBackend)
+		}
+	}
+
+	for i, rule := range cfg.Routing.Rules {
+		if rule.Path == "" && rule.PathPrefix == "" {
+			return fmt.Errorf("routing.rules[%d]: either path or path_prefix is required", i)
+		}
+		if rule.Backend == "" {
+			return fmt.Errorf("routing.rules[%d].backend is required", i)
+		}
+		if !backendNames[rule.Backend] {
+			return fmt.Errorf("routing.rules[%d]: backend not found: %s", i, rule.Backend)
 		}
 	}
 

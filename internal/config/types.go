@@ -8,6 +8,7 @@ import (
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
 	Backends  []BackendConfig `yaml:"backends"`
+	Routing   RoutingConfig   `yaml:"routing"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
 }
 
@@ -39,6 +40,24 @@ type BackendConfig struct {
 	Weight       int               `yaml:"weight,omitempty"`
 	Timeout      time.Duration     `yaml:"timeout,omitempty"`
 	RetryCount   int               `yaml:"retry_count,omitempty"`
+}
+
+// RoutingConfig contains routing rules configuration
+type RoutingConfig struct {
+	Rules          []RouteRule `yaml:"rules"`
+	DefaultBackend string      `yaml:"default_backend,omitempty"`
+}
+
+// RouteRule defines a routing rule
+type RouteRule struct {
+	Path        string            `yaml:"path"`                   // Path pattern (supports wildcards)
+	PathPrefix  string            `yaml:"path_prefix,omitempty"`  // Alternative to path for prefix matching
+	Host        string            `yaml:"host,omitempty"`         // Host header matching
+	Methods     []string          `yaml:"methods,omitempty"`      // HTTP methods (GET, POST, etc.)
+	Headers     map[string]string `yaml:"headers,omitempty"`      // Header matching
+	Backend     string            `yaml:"backend"`                // Target backend name
+	Priority    int               `yaml:"priority,omitempty"`     // Higher priority rules match first
+	StripPrefix bool              `yaml:"strip_prefix,omitempty"` // Remove prefix before forwarding
 }
 
 // HealthCheckConfig contains health check settings

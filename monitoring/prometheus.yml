@@ -24,36 +24,27 @@ scrape_configs:
     metrics_path: "/metrics"
     scheme: "http"
 
-  # Prometheus itself
+  # Prometheus itself (scrapes its own metrics)
   - job_name: "prometheus"
     static_configs:
-      - targets: ["localhost:9090"]
+      - targets: ["localhost:9090"]  # Internal port, not the exposed 9091
     scrape_interval: 30s
 
-  # Backend services
-  - job_name: "backend1"
-    static_configs:
-      - targets: ["backend1:80"]
-    scrape_interval: 15s
-    metrics_path: "/metrics"
-    scheme: "http"
+  # Backend services (only if they expose /metrics endpoint)
+  # Note: backend1 is nginx without metrics, backend2 needs instrumentation
+  # Uncomment and configure if you add Prometheus exporters to backends
 
-  - job_name: "backend2"
-    static_configs:
-      - targets: ["backend2:3000"]
-    scrape_interval: 15s
-    metrics_path: "/metrics"
-    scheme: "http"
+  # Optional: Node exporter for system metrics (service not deployed)
+  # Uncomment if you add node-exporter to docker-compose.yml
+  # - job_name: "node-exporter"
+  #   static_configs:
+  #     - targets: ["node-exporter:9100"]
+  #   scrape_interval: 15s
 
-  # Node exporter for system metrics (if available)
-  - job_name: "node-exporter"
-    static_configs:
-      - targets: ["node-exporter:9100"]
-    scrape_interval: 15s
-
-  # Container metrics via cAdvisor (if available)
-  - job_name: "cadvisor"
-    static_configs:
-      - targets: ["cadvisor:8080"]
-    scrape_interval: 15s
-    metrics_path: "/metrics"
+  # Optional: Container metrics via cAdvisor (service not deployed)
+  # Uncomment if you add cadvisor to docker-compose.yml
+  # - job_name: "cadvisor"
+  #   static_configs:
+  #     - targets: ["cadvisor:8080"]
+  #   scrape_interval: 15s
+  #   metrics_path: "/metrics"

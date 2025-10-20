@@ -57,8 +57,9 @@ func (b *Backend) GetConnections() int32 {
 // LoadBalancer manages backend selection and health checking
 type LoadBalancer struct {
 	backends        []*Backend
+	backendsByName  map[string][]*Backend // Group backends by config name
 	algorithm       string
-	roundRobinNext  int32
+	roundRobinIndex map[string]int32 // Per-backend-config round-robin index
 	mu              sync.RWMutex
 	healthCheckers  map[string]*health.Checker
 	stopHealthCheck chan struct{}
@@ -72,12 +73,16 @@ func NewLoadBalancer(configs []config.BackendConfig) (*LoadBalancer, error) {
 
 	lb := &LoadBalancer{
 		backends:        make([]*Backend, 0, len(configs)),
+		backendsByName:  make(map[string][]*Backend),
+		roundRobinIndex: make(map[string]int32),
 		healthCheckers:  make(map[string]*health.Checker),
 		stopHealthCheck: make(chan struct{}),
 	}
 
 	// Create backends
 	for _, cfg := range configs {
+		configBackends := make([]*Backend, 0, len(cfg.Targets))
+
 		for _, target := range cfg.Targets {
 			// Validate URL
 			if _, err := url.Parse(target); err != nil {
@@ -106,7 +111,12 @@ func NewLoadBalancer(configs []config.BackendConfig) (*LoadBalancer, error) {
 			}
 
 			lb.backends = append(lb.backends, backend)
+			configBackends = append(configBackends, backend)
 		}
+
+		// Group backends by config name
+		lb.backendsByName[cfg.Name] = configBackends
+		lb.roundRobinIndex[cfg.Name] = 0
 
 		// Use the load balancer algorithm from the first backend config
 		// (in a real implementation, you might want this at the global level)
@@ -123,6 +133,39 @@ func NewLoadBalancer(configs []config.BackendConfig) (*LoadBalancer, error) {
 	return lb, nil
 }
 
+// GetBackendForConfig selects a backend for a specific backend config name
+func (lb *LoadBalancer) GetBackendForConfig(configName string) *Backend {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+
+	backends, ok := lb.backendsByName[configName]
+	if !ok || len(backends) == 0 {
+		return nil
+	}
+
+	healthyBackends := make([]*Backend, 0, len(backends))
+	for _, backend := range backends {
+		if backend.IsHealthy() {
+			healthyBackends = append(healthyBackends, backend)
+		}
+	}
+
+	if len(healthyBackends) == 0 {
+		return nil
+	}
+
+	switch lb.algorithm {
+	case "round_robin":
+		return lb.roundRobinForConfig(configName, healthyBackends)
+	case "least_connections":
+		return lb.leastConnections(healthyBackends)
+	case "weighted":
+		return lb.weighted(healthyBackends)
+	default:
+		return lb.roundRobinForConfig(configName, healthyBackends)
+	}
+}
+
 // GetBackend selects a backend using the configured algorithm
 func (lb *LoadBalancer) GetBackend(r *http.Request) *Backend {
 	lb.mu.RLock()
@@ -135,13 +178,13 @@ func (lb *LoadBalancer) GetBackend(r *http.Request) *Backend {
 
 	switch lb.algorithm {
 	case "round_robin":
-		return lb.roundRobin(healthyBackends)
+		return lb.roundRobinForConfig("default", healthyBackends)
 	case "least_connections":
 		return lb.leastConnections(healthyBackends)
 	case "weighted":
 		return lb.weighted(healthyBackends)
 	default:
-		return lb.roundRobin(healthyBackends)
+		return lb.roundRobinForConfig("default", healthyBackends)
 	}
 }
 
@@ -156,15 +199,24 @@ func (lb *LoadBalancer) getHealthyBackends() []*Backend {
 	return healthy
 }
 
-// roundRobin implements round-robin load balancing
-func (lb *LoadBalancer) roundRobin(backends []*Backend) *Backend {
+// roundRobinForConfig implements round-robin load balancing for a specific config
+func (lb *LoadBalancer) roundRobinForConfig(configName string, backends []*Backend) *Backend {
 	if len(backends) == 0 {
 		return nil
 	}
 
-	next := atomic.AddInt32(&lb.roundRobinNext, 1)
+	// Get current index for this config
+	currentIndex, ok := lb.roundRobinIndex[configName]
+	if !ok {
+		currentIndex = 0
+	}
+
+	next := atomic.AddInt32(&currentIndex, 1)
 	index := int(next-1) % len(backends)
 	backend := backends[index]
+
+	// Update the index
+	lb.roundRobinIndex[configName] = next
 
 	backend.IncrementConnections()
 	go func() {
@@ -174,6 +226,11 @@ func (lb *LoadBalancer) roundRobin(backends []*Backend) *Backend {
 	}()
 
 	return backend
+}
+
+// roundRobin implements round-robin load balancing (deprecated, use roundRobinForConfig)
+func (lb *LoadBalancer) roundRobin(backends []*Backend) *Backend {
+	return lb.roundRobinForConfig("default", backends)
 }
 
 // leastConnections implements least-connections load balancing
@@ -298,11 +355,15 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 
 	// Clear existing backends
 	lb.backends = lb.backends[:0]
+	lb.backendsByName = make(map[string][]*Backend)
+	lb.roundRobinIndex = make(map[string]int32)
 	lb.healthCheckers = make(map[string]*health.Checker)
 	lb.stopHealthCheck = make(chan struct{})
 
 	// Add new backends (similar to NewLoadBalancer)
 	for _, cfg := range configs {
+		configBackends := make([]*Backend, 0, len(cfg.Targets))
+
 		for _, target := range cfg.Targets {
 			if _, err := url.Parse(target); err != nil {
 				return fmt.Errorf("invalid backend URL %s: %w", target, err)
@@ -328,7 +389,11 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 			}
 
 			lb.backends = append(lb.backends, backend)
+			configBackends = append(configBackends, backend)
 		}
+
+		lb.backendsByName[cfg.Name] = configBackends
+		lb.roundRobinIndex[cfg.Name] = 0
 	}
 
 	// Restart health checks

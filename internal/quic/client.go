@@ -26,7 +26,6 @@ func (c *Client) Connect(ctx context.Context, addr string) (quic.Connection, err
 		return nil, fmt.Errorf("failed to dial QUIC address: %w", err)
 	}
 
-	// Connection established successfully
 	return conn, nil
 }
 
