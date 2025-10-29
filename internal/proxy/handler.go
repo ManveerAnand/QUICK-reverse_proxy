@@ -32,6 +32,12 @@ func NewHandler(router *Router, loadBalancer *LoadBalancer, metrics *telemetry.M
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
+	// Handle health check endpoint
+	if r.URL.Path == "/health" {
+		h.handleHealthCheck(w, r)
+		return
+	}
+
 	// Route the request to find the appropriate backend config
 	backendConfig, err := h.router.Route(r)
 	if err != nil {
@@ -270,4 +276,47 @@ func (w *responseWrapper) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.size += int64(n)
 	return n, err
+}
+
+// handleHealthCheck handles the /health endpoint
+func (h *Handler) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	// Get backend status from load balancer
+	backends := h.loadBalancer.GetBackendStatus()
+	
+	// Count healthy backends
+	healthyCount := 0
+	totalCount := len(backends)
+	
+	for _, backendInfo := range backends {
+		if backendMap, ok := backendInfo.(map[string]interface{}); ok {
+			if healthy, ok := backendMap["healthy"].(bool); ok && healthy {
+				healthyCount++
+			}
+		}
+	}
+	
+	// Determine overall health status
+	status := "healthy"
+	statusCode := http.StatusOK
+	
+	if healthyCount == 0 {
+		status = "unhealthy"
+		statusCode = http.StatusServiceUnavailable
+	} else if healthyCount < totalCount {
+		status = "degraded"
+	}
+	
+	// Send JSON response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	
+	// Simple JSON response
+	fmt.Fprintf(w, `{"status":"%s","healthy_backends":%d,"total_backends":%d,"timestamp":"%s"}`,
+		status, healthyCount, totalCount, time.Now().Format(time.RFC3339))
+	
+	logrus.WithFields(logrus.Fields{
+		"status":         status,
+		"healthy_count":  healthyCount,
+		"total_count":    totalCount,
+	}).Debug("Health check completed")
 }

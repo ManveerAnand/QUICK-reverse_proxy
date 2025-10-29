@@ -17,6 +17,7 @@ type Server struct {
 	config       *config.Config
 	quicServer   *quic.Server
 	httpServer   *http.Server
+	httpsServer  *http.Server
 	router       *Router
 	handler      *Handler
 	telemetry    *telemetry.Manager
@@ -55,10 +56,20 @@ func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Create HTTPS server on port 443 (for browser compatibility)
+	httpsServer := &http.Server{
+		Addr:         cfg.Server.Address,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	return &Server{
 		config:       cfg,
 		quicServer:   quicServer,
 		httpServer:   httpServer,
+		httpsServer:  httpsServer,
 		router:       router,
 		handler:      handler,
 		telemetry:    telemetryManager,
@@ -86,6 +97,16 @@ func (s *Server) Start() error {
 		}()
 	}
 
+	// Start HTTPS server (TCP port 443) for browser compatibility
+	if s.httpsServer != nil {
+		go func() {
+			logrus.WithField("address", s.httpsServer.Addr).Info("Starting HTTPS server on TCP")
+			if err := s.httpsServer.ListenAndServeTLS(s.config.Server.CertFile, s.config.Server.KeyFile); err != nil && err != http.ErrServerClosed {
+				logrus.WithError(err).Error("HTTPS server error")
+			}
+		}()
+	}
+
 	// Start the QUIC server with our handler
 	return s.quicServer.Start(s.handler)
 }
@@ -101,6 +122,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			logrus.WithError(err).Error("Failed to shutdown HTTP fallback server")
+		}
+	}
+
+	// Shutdown HTTPS server
+	if s.httpsServer != nil {
+		if err := s.httpsServer.Shutdown(ctx); err != nil {
+			logrus.WithError(err).Error("Failed to shutdown HTTPS server")
 		}
 	}
 
