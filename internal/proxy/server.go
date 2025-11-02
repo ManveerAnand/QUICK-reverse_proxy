@@ -33,7 +33,7 @@ func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server
 	}
 
 	// Create load balancer
-	loadBalancer, err := NewLoadBalancer(cfg.Backends)
+	loadBalancer, err := NewLoadBalancer(cfg.Backends, telemetryManager.GetMetrics())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create load balancer: %w", err)
 	}

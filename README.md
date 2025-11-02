@@ -74,6 +74,177 @@ A high-performance reverse proxy built with QUIC/HTTP-3 support, featuring compr
    curl http://localhost:8888/health
    ```
 
+## Health Checking and Failover
+
+The QUIC reverse proxy includes a robust health checking system that ensures high availability and automatic failover.
+
+### Health Check Configuration
+
+```yaml
+health_check:
+  enabled: true
+  interval: 10s           # Check every 10 seconds
+  timeout: 5s            # Request timeout
+  path: /health          # Health check endpoint
+  unhealthy_threshold: 3 # Mark unhealthy after 3 failures
+  healthy_threshold: 2   # Mark healthy after 2 successes
+```
+
+### How Failover Works
+
+1. **Continuous Monitoring**
+   - Every backend is checked at regular intervals (default: 10 seconds)
+   - HTTP GET request sent to configured health endpoint (`/health`)
+   - Timeout enforced (default: 5 seconds)
+
+2. **Failure Detection**
+   - If a backend fails to respond or returns error (non-2xx status)
+   - Failure counter increments
+   - After reaching unhealthy threshold (default: 3 consecutive failures):
+     - Backend marked as **unhealthy** ❌
+     - Automatically removed from load balancer rotation
+     - No traffic routed to failed backend
+
+3. **Automatic Recovery**
+   - Health checks continue for unhealthy backends
+   - On successful health check, success counter increments
+   - After reaching healthy threshold (default: 2 consecutive successes):
+     - Backend marked as **healthy** ✅
+     - Automatically re-added to load balancer rotation
+     - Traffic resumes to recovered backend
+
+4. **Real-time Status Monitoring**
+   - Query `/health` endpoint for current status:
+     ```bash
+     curl http://localhost:80/health
+     ```
+   - Response includes:
+     ```json
+     {
+       "status": "healthy",          // Overall: healthy/degraded/unhealthy
+       "healthy_backends": 2,        // Number of healthy backends
+       "total_backends": 3,          // Total configured backends
+       "timestamp": "2025-11-02T12:00:00Z"
+     }
+     ```
+   - Status values:
+     - `healthy` - All backends operational ✅
+     - `degraded` - Some backends down (partial capacity) ⚠️
+     - `unhealthy` - All backends failed ❌
+
+### Control Center for Failover Testing
+
+Access the web-based control panel to simulate and manage failover scenarios:
+
+```bash
+# Open control center
+http://localhost:8889/control
+```
+
+**Control Panel Features:**
+- 🎮 **Real-time Backend Status** - Live health indicators and stats
+- 🛑 **Stop Backend** - Manually stop containers to test failover
+- ▶️ **Start Backend** - Restart failed backends
+- 🔄 **Restart Backend** - Graceful restart with connection draining
+- 📊 **Grafana Integration** - Direct links to performance dashboards
+- 🔥 **Load Generation** - Simulate traffic (50 req/s)
+- 💥 **Crash Simulation** - Randomly stop healthy backend
+- 📝 **Activity Logs** - Real-time event tracking
+
+**API Endpoints:**
+```bash
+# Stop a backend
+curl -X POST http://localhost:8889/api/backend/stop?name=backend1
+
+# Start a backend
+curl -X POST http://localhost:8889/api/backend/start?name=backend1
+
+# Restart a backend
+curl -X POST http://localhost:8889/api/backend/restart?name=backend1
+```
+
+### Failover Scenario Example
+
+**Scenario:** Backend1 crashes during production traffic
+
+1. **T+0s** - Backend1 becomes unresponsive (simulated crash)
+2. **T+10s** - First health check fails
+3. **T+20s** - Second health check fails
+4. **T+30s** - Third health check fails → Backend1 marked unhealthy
+5. **T+30s** - Load balancer removes backend1 from rotation
+6. **T+30s** - All traffic automatically routed to backend2 and backend3
+7. **Status:** System status changes from `healthy` to `degraded`
+
+**Recovery:**
+1. **T+60s** - Administrator restarts backend1 via control panel
+2. **T+70s** - First health check succeeds
+3. **T+80s** - Second health check succeeds → Backend1 marked healthy
+4. **T+80s** - Load balancer re-adds backend1 to rotation
+5. **T+80s** - Traffic resumes to backend1 in round-robin fashion
+6. **Status:** System status returns to `healthy`
+
+### Monitoring Failover Events
+
+**Prometheus Metrics:**
+```bash
+# Check backend health status
+backend_health{backend="backend1"} = 1  # 1=healthy, 0=unhealthy
+
+# Monitor health check failures
+health_check_failures_total{backend="backend1"}
+
+# Track backend uptime
+backend_uptime_seconds{backend="backend1"}
+```
+
+**Grafana Dashboards:**
+- Navigate to: http://localhost:3001/d/quic-proxy-performance
+- Panels show:
+  - Backend distribution (traffic shift during failover)
+  - Request latency (impact of backend loss)
+  - Success rate (should remain 100% during graceful failover)
+
+**Jaeger Tracing:**
+- View request flows: http://localhost:16686
+- Trace failed requests to identify issues
+- Monitor backend selection in load balancer
+
+**Log Monitoring:**
+```bash
+# Watch proxy logs for health check events
+docker logs -f quic-reverse-proxy | grep -i health
+
+# Sample log output:
+# {"level":"warn","backend":"backend1","msg":"Health check failed"}
+# {"level":"info","backend":"backend1","msg":"Marked backend as unhealthy"}
+# {"level":"info","backend":"backend1","msg":"Removed from load balancer"}
+# {"level":"info","backend":"backend1","msg":"Health check passed"}
+# {"level":"info","backend":"backend1","msg":"Marked backend as healthy"}
+# {"level":"info","backend":"backend1","msg":"Added to load balancer"}
+```
+
+### Best Practices
+
+1. **Tune Thresholds Based on Traffic**
+   - High-traffic: Lower interval (5s), stricter thresholds (2 failures)
+   - Low-traffic: Higher interval (15s), lenient thresholds (5 failures)
+
+2. **Health Endpoint Design**
+   - Should be lightweight (< 100ms response time)
+   - Check critical dependencies (database, cache, external APIs)
+   - Return detailed status info in response body
+
+3. **Graceful Degradation**
+   - Configure minimum healthy backends
+   - Enable circuit breakers for cascading failures
+   - Set appropriate timeout values
+
+4. **Testing Failover**
+   - Use control panel to simulate failures
+   - Monitor Grafana dashboards during tests
+   - Verify zero request drops during failover
+   - Test recovery process thoroughly
+
 ### Docker Deployment
 
 1. **Start the full stack:**
@@ -84,8 +255,9 @@ A high-performance reverse proxy built with QUIC/HTTP-3 support, featuring compr
 2. **Access services:**
    - QUIC Proxy (HTTP/3): `https://localhost:443` 
    - HTTP Fallback: `http://localhost:80`
+   - **Control Center**: `http://localhost:8889/control` 🎮
    - Proxy Metrics: `http://localhost:9090/metrics`
-   - Proxy Health: `http://localhost:8888/health`
+   - Proxy Health: `http://localhost:80/health`
    - Prometheus: `http://localhost:9091`
    - Grafana: `http://localhost:3001` (admin/admin)
    - Jaeger UI: `http://localhost:16686`

@@ -27,7 +27,8 @@ for ($i = 1; $i -le $requestCount; $i++) {
         if ($response.StatusCode -eq 200) {
             $successCount++
         }
-    } catch {
+    }
+    catch {
         $errorCount++
     }
     
@@ -61,14 +62,16 @@ try {
     
     if ($httpRequests -gt 0) {
         Write-Host "  ✅ http_requests_total: FOUND ($httpRequests lines)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ❌ http_requests_total: NOT FOUND" -ForegroundColor Red
         Write-Host "     (Custom metrics not being recorded yet)" -ForegroundColor Gray
     }
     
     if ($backendRequests -gt 0) {
         Write-Host "  ✅ backend_requests_total: FOUND ($backendRequests lines)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ❌ backend_requests_total: NOT FOUND" -ForegroundColor Red
     }
     
@@ -81,7 +84,8 @@ try {
     Write-Host "📊 Grafana Dashboard: http://localhost:3001" -ForegroundColor Cyan
     Write-Host "🔍 Prometheus UI: http://localhost:9091" -ForegroundColor Cyan
     
-} catch {
+}
+catch {
     Write-Host "❌ Failed to fetch metrics: $($_.Exception.Message)" -ForegroundColor Red
 }
 

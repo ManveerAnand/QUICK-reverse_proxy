@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/os-dev/quic-reverse-proxy/internal/config"
+	"github.com/os-dev/quic-reverse-proxy/internal/telemetry"
 	"github.com/os-dev/quic-reverse-proxy/pkg/health"
 	"github.com/sirupsen/logrus"
 )
@@ -63,10 +64,11 @@ type LoadBalancer struct {
 	mu              sync.RWMutex
 	healthCheckers  map[string]*health.Checker
 	stopHealthCheck chan struct{}
+	metrics         *telemetry.Metrics
 }
 
 // NewLoadBalancer creates a new load balancer
-func NewLoadBalancer(configs []config.BackendConfig) (*LoadBalancer, error) {
+func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics) (*LoadBalancer, error) {
 	if len(configs) == 0 {
 		return nil, fmt.Errorf("no backends configured")
 	}
@@ -77,6 +79,7 @@ func NewLoadBalancer(configs []config.BackendConfig) (*LoadBalancer, error) {
 		roundRobinIndex: make(map[string]int32),
 		healthCheckers:  make(map[string]*health.Checker),
 		stopHealthCheck: make(chan struct{}),
+		metrics:         metrics,
 	}
 
 	// Create backends
@@ -319,6 +322,11 @@ func (lb *LoadBalancer) StartHealthChecks() {
 						if backend.Name == n {
 							wasHealthy := backend.IsHealthy()
 							backend.SetHealthy(healthy)
+
+							// Update Prometheus metric
+							if lb.metrics != nil {
+								lb.metrics.UpdateBackendHealth(n, healthy)
+							}
 
 							if wasHealthy != healthy {
 								logrus.WithFields(logrus.Fields{

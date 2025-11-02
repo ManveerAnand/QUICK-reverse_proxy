@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -34,6 +35,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Handle health check endpoint
 	if r.URL.Path == "/health" {
+		// Add CORS headers for control panel
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		
 		h.handleHealthCheck(w, r)
 		return
 	}
@@ -282,11 +293,11 @@ func (w *responseWrapper) Write(data []byte) (int, error) {
 func (h *Handler) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	// Get backend status from load balancer
 	backends := h.loadBalancer.GetBackendStatus()
-	
+
 	// Count healthy backends
 	healthyCount := 0
 	totalCount := len(backends)
-	
+
 	for _, backendInfo := range backends {
 		if backendMap, ok := backendInfo.(map[string]interface{}); ok {
 			if healthy, ok := backendMap["healthy"].(bool); ok && healthy {
@@ -294,29 +305,38 @@ func (h *Handler) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Determine overall health status
 	status := "healthy"
 	statusCode := http.StatusOK
-	
+
 	if healthyCount == 0 {
 		status = "unhealthy"
 		statusCode = http.StatusServiceUnavailable
 	} else if healthyCount < totalCount {
 		status = "degraded"
 	}
-	
+
+	// Build response with backends details
+	response := map[string]interface{}{
+		"status":           status,
+		"healthy_backends": healthyCount,
+		"total_backends":   totalCount,
+		"timestamp":        time.Now().Format(time.RFC3339),
+		"backends":         backends,
+	}
+
 	// Send JSON response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	
-	// Simple JSON response
-	fmt.Fprintf(w, `{"status":"%s","healthy_backends":%d,"total_backends":%d,"timestamp":"%s"}`,
-		status, healthyCount, totalCount, time.Now().Format(time.RFC3339))
-	
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logrus.WithError(err).Error("Failed to encode health check response")
+	}
+
 	logrus.WithFields(logrus.Fields{
-		"status":         status,
-		"healthy_count":  healthyCount,
-		"total_count":    totalCount,
+		"status":        status,
+		"healthy_count": healthyCount,
+		"total_count":   totalCount,
 	}).Debug("Health check completed")
 }

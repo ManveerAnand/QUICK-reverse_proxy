@@ -27,7 +27,7 @@ scrape_configs:
   # Prometheus itself (scrapes its own metrics)
   - job_name: "prometheus"
     static_configs:
-      - targets: ["localhost:9090"]  # Internal port, not the exposed 9091
+      - targets: ["localhost:9090"] # Internal port, not the exposed 9091
     scrape_interval: 30s
 
   # Backend services (only if they expose /metrics endpoint)

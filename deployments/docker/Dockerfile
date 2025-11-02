@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for QUIC Reverse Proxy
 
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 FROM alpine:latest
 
 # Install runtime dependencies
-RUN apk --no-cache add ca-certificates openssl curl && \
+RUN apk --no-cache add ca-certificates openssl curl docker && \
     addgroup -g 1000 -S appgroup && \
     adduser -u 1000 -S -G appgroup appuser
 
@@ -45,8 +45,8 @@ COPY --from=builder /app/configs ./configs
 RUN mkdir -p certs logs && \
     chown -R appuser:appgroup /app
 
-# Switch to non-root user
-USER appuser
+# NOTE: Running as root for docker socket access (control API)
+# USER appuser
 
 # Expose ports
 # QUIC/HTTP3 proxy port

@@ -17,12 +17,12 @@ backends:
       - "http://backend1:80"
       - "http://backend2:3000"
     health_check:
-      enabled: false
+      enabled: true
       path: "/"
-      interval: "10s"
-      timeout: "5s"
+      interval: "3s"
+      timeout: "2s"
       healthy_threshold: 2
-      unhealthy_threshold: 3
+      unhealthy_threshold: 2
     load_balancer: "round_robin"
     weight: 1
     timeout: "10s"
@@ -32,12 +32,12 @@ backends:
     targets:
       - "http://backend1:80"
     health_check:
-      enabled: false
+      enabled: true
       path: "/"
-      interval: "15s"
-      timeout: "3s"
+      interval: "3s"
+      timeout: "2s"
       healthy_threshold: 2
-      unhealthy_threshold: 3
+      unhealthy_threshold: 2
     load_balancer: "round_robin"
     weight: 2
     timeout: "15s"

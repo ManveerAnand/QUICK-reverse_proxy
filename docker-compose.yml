@@ -15,10 +15,13 @@ services:
       - "80:80/tcp"      # HTTP fallback (for testing)
       - "9090:9090/tcp"  # Metrics
       - "8888:8080/tcp"  # Health check (changed from 8080)
+      - "8889:8889/tcp"  # Control API
     volumes:
       - ./configs:/app/configs:ro
       - ./certs:/app/certs:ro
       - ./logs:/app/logs
+      - ./www:/app/www:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DEBUG=true
       - LOG_LEVEL=info

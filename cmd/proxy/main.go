@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/os-dev/quic-reverse-proxy/internal/api"
 	"github.com/os-dev/quic-reverse-proxy/internal/config"
 	"github.com/os-dev/quic-reverse-proxy/internal/proxy"
 	"github.com/os-dev/quic-reverse-proxy/internal/telemetry"
@@ -63,6 +64,15 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to create proxy server")
 	}
+
+	// Initialize control API server
+	controlServer := api.NewControlServer("8889")
+	go func() {
+		logrus.Info("Starting control API server on :8889")
+		if err := controlServer.Start(); err != nil {
+			logrus.WithError(err).Error("Control server error")
+		}
+	}()
 
 	// Start the server in a goroutine
 	serverErrors := make(chan error, 1)
