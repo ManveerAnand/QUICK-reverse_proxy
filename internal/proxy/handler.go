@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/os-dev/quic-reverse-proxy/internal/quic"
 	"github.com/os-dev/quic-reverse-proxy/internal/telemetry"
 	"github.com/sirupsen/logrus"
 )
@@ -39,12 +41,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		
+
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		
+
 		h.handleHealthCheck(w, r)
 		return
 	}
@@ -72,6 +74,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleError(w, r, "no healthy backends available", http.StatusServiceUnavailable)
 		return
 	}
+
+	// Track active connections
+	backend.IncrementConnections()
+	defer backend.DecrementConnections()
 
 	// Create reverse proxy for the selected backend
 	proxy := h.createReverseProxy(backend)
@@ -103,6 +109,17 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
+	// Set up the transport based on the backend protocol
+	if backend.Protocol == "h3" {
+		proxy.Transport = quic.NewRoundTripper(backend.TLSSkipVerify)
+	} else {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if backend.TLSSkipVerify {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+		proxy.Transport = transport
+	}
+
 	// Customize the director to modify requests
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -111,7 +128,15 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 		// Modify the request as needed
 		req.Host = target.Host
 		req.URL.Host = target.Host
-		req.URL.Scheme = target.Scheme
+		
+		// Map backend protocol to the correct scheme for the request
+		if backend.Protocol == "h3" || backend.Protocol == "https" {
+			req.URL.Scheme = "https"
+		} else if backend.Protocol == "http" {
+			req.URL.Scheme = "http"
+		} else {
+			req.URL.Scheme = target.Scheme
+		}
 
 		// Add/modify headers
 		req.Header.Set("X-Forwarded-Proto", "https")
@@ -329,7 +354,7 @@ func (h *Handler) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	// Send JSON response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		logrus.WithError(err).Error("Failed to encode health check response")
 	}

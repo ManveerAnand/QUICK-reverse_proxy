@@ -17,9 +17,11 @@ import (
 
 // Backend represents a backend server
 type Backend struct {
-	Name        string
-	URL         string
-	Weight      int
+	Name          string
+	URL           string
+	Protocol      string
+	TLSSkipVerify bool
+	Weight        int
 	healthy     int32 // atomic bool
 	checker     *health.Checker
 	mu          sync.RWMutex
@@ -93,9 +95,11 @@ func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics)
 			}
 
 			backend := &Backend{
-				Name:   fmt.Sprintf("%s-%s", cfg.Name, target),
-				URL:    target,
-				Weight: cfg.Weight,
+				Name:          fmt.Sprintf("%s-%s", cfg.Name, target),
+				URL:           target,
+				Protocol:      cfg.Protocol,
+				TLSSkipVerify: cfg.TLSSkipVerify,
+				Weight:        cfg.Weight,
 			}
 
 			// Initially mark as healthy
@@ -378,9 +382,11 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 			}
 
 			backend := &Backend{
-				Name:   fmt.Sprintf("%s-%s", cfg.Name, target),
-				URL:    target,
-				Weight: cfg.Weight,
+				Name:          fmt.Sprintf("%s-%s", cfg.Name, target),
+				URL:           target,
+				Protocol:      cfg.Protocol,
+				TLSSkipVerify: cfg.TLSSkipVerify,
+				Weight:        cfg.Weight,
 			}
 
 			backend.SetHealthy(true)

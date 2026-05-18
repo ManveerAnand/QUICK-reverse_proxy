@@ -33,13 +33,15 @@ type QUICConfig struct {
 
 // BackendConfig represents a backend service configuration
 type BackendConfig struct {
-	Name         string            `yaml:"name"`
-	Targets      []string          `yaml:"targets"`
-	HealthCheck  HealthCheckConfig `yaml:"health_check"`
-	LoadBalancer string            `yaml:"load_balancer"` // "round_robin", "least_connections", "weighted"
-	Weight       int               `yaml:"weight,omitempty"`
-	Timeout      time.Duration     `yaml:"timeout,omitempty"`
-	RetryCount   int               `yaml:"retry_count,omitempty"`
+	Name          string            `yaml:"name"`
+	Targets       []string          `yaml:"targets"`
+	Protocol      string            `yaml:"protocol,omitempty"` // "http", "https", "h3"
+	TLSSkipVerify bool              `yaml:"tls_skip_verify,omitempty"`
+	HealthCheck   HealthCheckConfig `yaml:"health_check"`
+	LoadBalancer  string            `yaml:"load_balancer"` // "round_robin", "least_connections", "weighted"
+	Weight        int               `yaml:"weight,omitempty"`
+	Timeout       time.Duration     `yaml:"timeout,omitempty"`
+	RetryCount    int               `yaml:"retry_count,omitempty"`
 }
 
 // RoutingConfig contains routing rules configuration

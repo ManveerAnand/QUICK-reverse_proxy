@@ -67,6 +67,9 @@ func setDefaults(cfg *Config) error {
 		if backend.LoadBalancer == "" {
 			backend.LoadBalancer = "round_robin"
 		}
+		if backend.Protocol == "" {
+			backend.Protocol = "http"
+		}
 		if backend.Weight == 0 {
 			backend.Weight = 1
 		}
@@ -192,6 +195,15 @@ func validate(cfg *Config) error {
 		}
 		if !validLBMethods[backend.LoadBalancer] {
 			return fmt.Errorf("invalid load balancer method: %s", backend.LoadBalancer)
+		}
+
+		validProtocols := map[string]bool{
+			"http":  true,
+			"https": true,
+			"h3":    true,
+		}
+		if !validProtocols[backend.Protocol] {
+			return fmt.Errorf("invalid backend protocol: %s", backend.Protocol)
 		}
 
 		if backend.Weight <= 0 {

@@ -40,23 +40,18 @@ services:
       retries: 3
       start_period: 30s
 
-  # Backend Service 1 (Example Go HTTP server)
+  # Backend Service 1 (Example Go HTTP/3 server)
   backend1:
-    image: nginx:alpine
+    build:
+      context: ./examples/h3-backend
+      dockerfile: Dockerfile
     container_name: backend1
     ports:
-      - "8080:80"
-    volumes:
-      - ./www:/usr/share/nginx/html:ro
+      - "8081:8081/udp"
     networks:
       - proxy-network
     environment:
-      - SERVER_NAME=backend1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
+      - SERVER_NAME=backend1-h3
 
   # Backend Service 2 (Example Node.js server)
   backend2:

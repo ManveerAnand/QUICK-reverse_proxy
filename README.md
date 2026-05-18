@@ -1,458 +1,144 @@
 # QUIC Reverse Proxy
 
-A high-performance reverse proxy built with QUIC/HTTP-3 support, featuring comprehensive telemetry, load balancing, and health monitoring.
+An enterprise-grade, high-performance reverse proxy engineered with end-to-end QUIC and HTTP/3 support. It features comprehensive telemetry, dynamic load balancing, active health monitoring, and graceful failover capabilities designed for modern edge network infrastructure.
 
-## Features
+## Project Abstract
 
-🚀 **Core Functionality**
-- QUIC/HTTP-3 reverse proxy with TLS 1.3
-- HTTP/1.1 fallback support for testing and compatibility
-- Multiple load balancing algorithms (round-robin, least-connections, weighted)
-- Advanced health checking with configurable thresholds
-- Graceful shutdown and connection handling
-- Path-based routing with wildcard support
+Modern network traffic demands low-latency, secure, and multiplexed connections. While many reverse proxies terminate QUIC/HTTP-3 at the edge to serve clients, they often revert to legacy HTTP/1.1 (TCP) when forwarding traffic to internal backend services. 
 
-📊 **Observability & Monitoring**
-- Comprehensive Prometheus metrics (HTTP requests, latency, backend health)
-- Pre-built Grafana dashboards with 10+ performance panels
-- OpenTelemetry distributed tracing with Jaeger
-- Structured logging with configurable levels
-- Real-time connection and request metrics
-- Backend health status tracking
-- Custom metrics: request rates, latency percentiles (p50/p95/p99), success rates
+This project implements a true **end-to-end QUIC proxy**. It utilizes the `quic-go` implementation to terminate incoming TLS 1.3/HTTP-3 connections, dynamically select optimal transport streams, and natively proxy requests to backend microservices over HTTP/3, maintaining the performance benefits of QUIC throughout the entire request lifecycle.
 
-🔧 **Production-Ready**
-- Comprehensive configuration management
-- TLS certificate validation and generation
-- Docker containerization
-- Kubernetes deployment manifests
-- CI/CD pipeline integration
+---
 
-## Quick Start
+## Core Architecture
+
+The system is designed with a modular architecture, segregating the transport layer, data plane (routing and load balancing), and the control plane (health checks and telemetry).
+
+### Transport Layer
+*   **Ingress Protocol Support**: Natively terminates QUIC/HTTP-3 (UDP) alongside a standard HTTP/1.1 (TCP) fallback listener for legacy clients.
+*   **Dynamic Egress Routing**: Employs a custom protocol-aware RoundTripper. Based on backend configuration, the proxy dynamically selects between `http3.RoundTripper` for QUIC-enabled microservices and `http.Transport` for standard HTTP/HTTPS backends.
+*   **Zero-RTT & TLS 1.3**: Fully leverages TLS 1.3 to minimize connection overhead, supporting 0-RTT handshakes where applicable.
+
+### Data Plane: Routing & Load Balancing
+*   **Rule-based Routing**: Matches incoming requests against a prioritized list of rules evaluating paths, prefixes, host headers, and HTTP methods.
+*   **Algorithms**: Distributes traffic across backend pools using configurable strategies:
+    *   `round_robin`: Sequential distribution.
+    *   `least_connections`: Routes to the backend with the fewest active, in-flight requests.
+    *   `weighted`: Proportionally allocates traffic based on assigned backend weights.
+
+### Control Plane: Health Monitoring
+*   **Active Probing**: Executes scheduled background HTTP probes against backend endpoints.
+*   **Automated Failover**: Isolates and removes degraded backends from the active load-balancer rotation upon breaching failure thresholds.
+*   **Self-Healing**: Automatically reinstates backends into the rotation once consecutive successful probes meet the recovery threshold.
+
+---
+
+## Comprehensive Telemetry Stack
+
+Visibility is treated as a first-class citizen. The proxy is instrumented to export data across the three pillars of observability:
+
+1.  **Metrics (Prometheus)**: Exposes granular metrics at the `/metrics` endpoint, capturing total requests, active connections, status code distributions, payload sizes, and precise latency histograms for both client-to-proxy and proxy-to-backend hops.
+2.  **Distributed Tracing (OpenTelemetry)**: Injects and propagates OpenTelemetry span contexts, exporting distributed trace data to Jaeger for complex request lifecycle analysis.
+3.  **Structured Logging**: Emits JSON-formatted logs suitable for aggregation (e.g., ELK or Splunk), detailing request outcomes, health check state transitions, and transport-level errors.
+
+*A pre-configured Grafana dashboard is provided in the repository to visualize this data immediately upon deployment.*
+
+---
+
+## Getting Started
 
 ### Prerequisites
+*   Go 1.24 or later
+*   OpenSSL (for local certificate generation)
+*   Docker and Docker Compose
 
-- Go 1.21 or later
-- OpenSSL (for certificate generation)
-- Docker and Docker Compose (for containerized deployment)
+### Local Development Environment
 
-### Local Development
+The repository includes a complete `docker-compose` environment that spins up the proxy, a sample HTTP/3 backend service, and the full observability stack (Prometheus, Grafana, and Jaeger).
 
-1. **Initialize the project:**
-   ```bash
-   make init-project
-   ```
+1.  **Initialize the Environment**
+    This command downloads Go modules and generates the self-signed certificates required for local TLS 1.3 termination.
+    ```bash
+    make init-project
+    ```
 
-2. **Start backend services:**
-   ```bash
-   # Terminal 1: Node.js backend
-   cd examples/node-backend
-   npm install
-   npm start
+2.  **Launch the Infrastructure**
+    ```bash
+    make docker-compose-up
+    ```
 
-   # Terminal 2: Another backend (or use Docker)
-   python -m http.server 8080
-   ```
+3.  **Verify End-to-End QUIC Proxying**
+    Ensure you have an HTTP/3 capable client (like a recent version of `curl` compiled with HTTP/3 support).
+    ```bash
+    # The request hits the proxy via HTTP/3 and is forwarded to the backend via HTTP/3
+    curl --http3 https://localhost:443/api/status -k
+    ```
 
-3. **Run the proxy:**
-   ```bash
-   make run
-   ```
+### Component Access Points
+*   **QUIC Proxy Ingress**: `https://localhost:443`
+*   **Prometheus**: `http://localhost:9091`
+*   **Grafana Dashboards**: `http://localhost:3001` *(Default credentials: admin/admin)*
+*   **Jaeger UI**: `http://localhost:16686`
 
-4. **Test the proxy:**
-   ```bash
-   # HTTP/3 request (requires curl with HTTP/3 support)
-   curl --http3 https://localhost:443/api/status -k
+---
 
-   # HTTP/1.1 fallback (for testing)
-   curl http://localhost:80/
+## Configuration Reference
 
-   # Check metrics
-   curl http://localhost:9090/metrics
+The proxy behavior is dictated by a YAML configuration file.
 
-   # Health check
-   curl http://localhost:8888/health
-   ```
-
-## Health Checking and Failover
-
-The QUIC reverse proxy includes a robust health checking system that ensures high availability and automatic failover.
-
-### Health Check Configuration
+### Backend Configuration Schema
+The backend definition allows precise control over protocol selection and health monitoring.
 
 ```yaml
-health_check:
-  enabled: true
-  interval: 10s           # Check every 10 seconds
-  timeout: 5s            # Request timeout
-  path: /health          # Health check endpoint
-  unhealthy_threshold: 3 # Mark unhealthy after 3 failures
-  healthy_threshold: 2   # Mark healthy after 2 successes
-```
-
-### How Failover Works
-
-1. **Continuous Monitoring**
-   - Every backend is checked at regular intervals (default: 10 seconds)
-   - HTTP GET request sent to configured health endpoint (`/health`)
-   - Timeout enforced (default: 5 seconds)
-
-2. **Failure Detection**
-   - If a backend fails to respond or returns error (non-2xx status)
-   - Failure counter increments
-   - After reaching unhealthy threshold (default: 3 consecutive failures):
-     - Backend marked as **unhealthy** ❌
-     - Automatically removed from load balancer rotation
-     - No traffic routed to failed backend
-
-3. **Automatic Recovery**
-   - Health checks continue for unhealthy backends
-   - On successful health check, success counter increments
-   - After reaching healthy threshold (default: 2 consecutive successes):
-     - Backend marked as **healthy** ✅
-     - Automatically re-added to load balancer rotation
-     - Traffic resumes to recovered backend
-
-4. **Real-time Status Monitoring**
-   - Query `/health` endpoint for current status:
-     ```bash
-     curl http://localhost:80/health
-     ```
-   - Response includes:
-     ```json
-     {
-       "status": "healthy",          // Overall: healthy/degraded/unhealthy
-       "healthy_backends": 2,        // Number of healthy backends
-       "total_backends": 3,          // Total configured backends
-       "timestamp": "2025-11-02T12:00:00Z"
-     }
-     ```
-   - Status values:
-     - `healthy` - All backends operational ✅
-     - `degraded` - Some backends down (partial capacity) ⚠️
-     - `unhealthy` - All backends failed ❌
-
-### Control Center for Failover Testing
-
-Access the web-based control panel to simulate and manage failover scenarios:
-
-```bash
-# Open control center
-http://localhost:8889/control
-```
-
-**Control Panel Features:**
-- 🎮 **Real-time Backend Status** - Live health indicators and stats
-- 🛑 **Stop Backend** - Manually stop containers to test failover
-- ▶️ **Start Backend** - Restart failed backends
-- 🔄 **Restart Backend** - Graceful restart with connection draining
-- 📊 **Grafana Integration** - Direct links to performance dashboards
-- 🔥 **Load Generation** - Simulate traffic (50 req/s)
-- 💥 **Crash Simulation** - Randomly stop healthy backend
-- 📝 **Activity Logs** - Real-time event tracking
-
-**API Endpoints:**
-```bash
-# Stop a backend
-curl -X POST http://localhost:8889/api/backend/stop?name=backend1
-
-# Start a backend
-curl -X POST http://localhost:8889/api/backend/start?name=backend1
-
-# Restart a backend
-curl -X POST http://localhost:8889/api/backend/restart?name=backend1
-```
-
-### Failover Scenario Example
-
-**Scenario:** Backend1 crashes during production traffic
-
-1. **T+0s** - Backend1 becomes unresponsive (simulated crash)
-2. **T+10s** - First health check fails
-3. **T+20s** - Second health check fails
-4. **T+30s** - Third health check fails → Backend1 marked unhealthy
-5. **T+30s** - Load balancer removes backend1 from rotation
-6. **T+30s** - All traffic automatically routed to backend2 and backend3
-7. **Status:** System status changes from `healthy` to `degraded`
-
-**Recovery:**
-1. **T+60s** - Administrator restarts backend1 via control panel
-2. **T+70s** - First health check succeeds
-3. **T+80s** - Second health check succeeds → Backend1 marked healthy
-4. **T+80s** - Load balancer re-adds backend1 to rotation
-5. **T+80s** - Traffic resumes to backend1 in round-robin fashion
-6. **Status:** System status returns to `healthy`
-
-### Monitoring Failover Events
-
-**Prometheus Metrics:**
-```bash
-# Check backend health status
-backend_health{backend="backend1"} = 1  # 1=healthy, 0=unhealthy
-
-# Monitor health check failures
-health_check_failures_total{backend="backend1"}
-
-# Track backend uptime
-backend_uptime_seconds{backend="backend1"}
-```
-
-**Grafana Dashboards:**
-- Navigate to: http://localhost:3001/d/quic-proxy-performance
-- Panels show:
-  - Backend distribution (traffic shift during failover)
-  - Request latency (impact of backend loss)
-  - Success rate (should remain 100% during graceful failover)
-
-**Jaeger Tracing:**
-- View request flows: http://localhost:16686
-- Trace failed requests to identify issues
-- Monitor backend selection in load balancer
-
-**Log Monitoring:**
-```bash
-# Watch proxy logs for health check events
-docker logs -f quic-reverse-proxy | grep -i health
-
-# Sample log output:
-# {"level":"warn","backend":"backend1","msg":"Health check failed"}
-# {"level":"info","backend":"backend1","msg":"Marked backend as unhealthy"}
-# {"level":"info","backend":"backend1","msg":"Removed from load balancer"}
-# {"level":"info","backend":"backend1","msg":"Health check passed"}
-# {"level":"info","backend":"backend1","msg":"Marked backend as healthy"}
-# {"level":"info","backend":"backend1","msg":"Added to load balancer"}
-```
-
-### Best Practices
-
-1. **Tune Thresholds Based on Traffic**
-   - High-traffic: Lower interval (5s), stricter thresholds (2 failures)
-   - Low-traffic: Higher interval (15s), lenient thresholds (5 failures)
-
-2. **Health Endpoint Design**
-   - Should be lightweight (< 100ms response time)
-   - Check critical dependencies (database, cache, external APIs)
-   - Return detailed status info in response body
-
-3. **Graceful Degradation**
-   - Configure minimum healthy backends
-   - Enable circuit breakers for cascading failures
-   - Set appropriate timeout values
-
-4. **Testing Failover**
-   - Use control panel to simulate failures
-   - Monitor Grafana dashboards during tests
-   - Verify zero request drops during failover
-   - Test recovery process thoroughly
-
-### Docker Deployment
-
-1. **Start the full stack:**
-   ```bash
-   make docker-compose-up
-   ```
-
-2. **Access services:**
-   - QUIC Proxy (HTTP/3): `https://localhost:443` 
-   - HTTP Fallback: `http://localhost:80`
-   - **Control Center**: `http://localhost:8889/control` 🎮
-   - Proxy Metrics: `http://localhost:9090/metrics`
-   - Proxy Health: `http://localhost:80/health`
-   - Prometheus: `http://localhost:9091`
-   - Grafana: `http://localhost:3001` (admin/admin)
-   - Jaeger UI: `http://localhost:16686`
-
-3. **Configure Grafana (First-time setup):**
-   ```bash
-   # Access Grafana at http://localhost:3001
-   # Login: admin / admin (change password when prompted)
-   
-   # Import the performance dashboard:
-   # 1. Go to Dashboards → Import
-   # 2. Upload: monitoring/grafana/dashboards/quic-proxy-dashboard.json
-   # 3. Select "Prometheus" as the datasource
-   # 4. Click "Import"
-   ```
-
-4. **Generate test traffic:**
-   ```powershell
-   # Windows PowerShell
-   1..50 | ForEach-Object { curl http://localhost/; Start-Sleep -Milliseconds 100 }
-   ```
-   
-   ```bash
-   # Linux/Mac
-   for i in {1..50}; do curl http://localhost/; sleep 0.1; done
-   ```
-
-## Configuration
-
-The proxy is configured via YAML files. See `configs/proxy.yaml` for the main configuration:
-
-```yaml
-server:
-  address: ":443"
-  fallback_address: ":80"  # HTTP/1.1 fallback for testing
-  tls:
-    cert_file: "certs/server.crt"
-    key_file: "certs/server.key"
-
 backends:
-  - name: "backend1"
-    url: "http://backend1:80"
+  - name: "primary-http3-service"
+    targets:
+      - "localhost:8081"
+    # Determines the egress transport. Options: "h3", "https", "http".
+    protocol: "h3" 
+    # Bypasses TLS validation for self-signed backend certificates.
+    tls_skip_verify: true 
     weight: 1
-  - name: "backend2"
-    url: "http://backend2:3000"
-    weight: 1
-    
-load_balancer:
-  algorithm: "round_robin"  # round_robin, least_connections, weighted
-  
-health_check:
-  enabled: true
-  interval: "30s"
-  timeout: "5s"
-  path: "/health"
-
-telemetry:
-  metrics:
-    enabled: true
-    address: ":9090"
-  tracing:
-    enabled: true
-    jaeger_endpoint: "http://jaeger:14268/api/traces"
-  logging:
-    level: "info"
-    format: "json"
+    health_check:
+      enabled: true
+      interval: "10s"
+      timeout: "2s"
+      path: "/health"
 ```
 
-### Monitoring Configuration
+### Full Configuration Example
+Refer to `configs/example.yaml` in the repository for a complete example covering server TLS parameters, routing rules, and telemetry integrations.
 
-The proxy exposes comprehensive metrics at `:9090/metrics`:
+---
 
-**Custom Metrics:**
-- `http_requests_total` - Total HTTP requests (by method, status_code, backend)
-- `http_request_duration_seconds` - Request latency histogram
-- `http_request_size_bytes` - Request payload sizes
-- `http_response_size_bytes` - Response payload sizes
-- `backend_requests_total` - Backend request counts (by backend, status)
-- `backend_response_time_seconds` - Backend latency histogram
+## Development Guide
 
-**Go Runtime Metrics:**
-- `go_goroutines` - Active goroutines
-- `go_memstats_alloc_bytes` - Memory allocation
-- `process_cpu_seconds_total` - CPU usage
-
-See `monitoring/grafana/dashboards/METRICS_AVAILABLE.md` for complete metric documentation.
-
-## Architecture
-
-```
-Client (HTTP/3) → QUIC Proxy (Port 443) → Load Balancer → Backend Services
-Client (HTTP/1) → HTTP Server (Port 80) ↗                  ↓
-                                                    Health Checker
-                      ↓
-                 Telemetry Stack
-                 ├── Prometheus (Port 9091) - Metrics Collection
-                 ├── Grafana (Port 3001) - Visualization
-                 ├── Jaeger (Port 16686) - Distributed Tracing
-                 └── Structured Logs
-```
-
-### Components
-
-- **QUIC Server**: Handles HTTP/3 connections with TLS 1.3 on port 443
-- **HTTP Fallback Server**: HTTP/1.1 server on port 80 for testing and compatibility
-- **Load Balancer**: Distributes requests across backends using configurable algorithms
-- **Health Checker**: Monitors backend service health with periodic checks
-- **Telemetry Manager**: Coordinates metrics collection and distributed tracing
-- **Metrics Exporter**: Exposes Prometheus metrics at `:9090/metrics`
-- **Configuration Manager**: Handles YAML configuration loading and validation
-
-## Grafana Dashboard
-
-The project includes a pre-built Grafana dashboard with 10 performance panels:
-
-### Dashboard Panels
-
-1. **HTTP Request Rate** - Requests/sec by method and backend
-2. **Total Requests** - Cumulative request counter
-3. **Success Rate %** - Percentage of successful requests (200 status)
-4. **Request Latency (Percentiles)** - p50, p95, p99 latency tracking
-5. **Backend Request Distribution** - Traffic distribution across backends
-6. **Backend Response Time (p95)** - 95th percentile backend latency
-7. **Request/Response Sizes** - Data transfer metrics
-8. **Active Goroutines** - Concurrency monitoring
-9. **Memory Usage** - Heap allocation in MB
-10. **CPU Usage** - Process CPU utilization
-
-### Importing the Dashboard
-
-1. Access Grafana at `http://localhost:3001`
-2. Login with `admin/admin` (change password on first login)
-3. Navigate to **Dashboards** → **Import**
-4. Click **Upload JSON file**
-5. Select `monitoring/grafana/dashboards/quic-proxy-dashboard.json`
-6. Choose **Prometheus** as the datasource
-7. Click **Import**
-
-The dashboard auto-refreshes every 10 seconds and shows the last 15 minutes of data.
-
-### Available Dashboards
-
-- `quic-proxy-dashboard.json` - Main performance dashboard with custom metrics
-- Additional dashboards can be created using the metrics documented in `METRICS_AVAILABLE.md`
-
-## Development
-
-### Building
+### Build Targets
 
 ```bash
-# Build for current platform
+# Compile for the host architecture
 make build
 
-# Build for all platforms
+# Cross-compile binaries for Linux, macOS, and Windows
 make build-all
 
-# Build with debugging
+# Run the proxy locally with live-reloading (requires 'air')
 make dev
 ```
 
-### Testing
+### Quality Assurance
 
 ```bash
-# Run tests
+# Execute unit and integration tests
 make test
 
-# Run tests with coverage
+# Generate an HTML test coverage report
 make test-coverage
 
-# Run benchmarks
-make benchmark
-
-# Run linting
+# Run static analysis and linting
 make lint
-```
-
-## Deployment
-
-### Docker
-
-```bash
-# Build image
-make docker-build
-
-# Run container
-make docker-run
-```
-
-### Kubernetes
-
-```bash
-# Deploy to cluster
-kubectl apply -f deployments/k8s/
 ```
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+This project is licensed under the MIT License. See the LICENSE file for full details.
