@@ -53,12 +53,13 @@ RUN mkdir -p certs logs && \
 EXPOSE 443/udp
 # Metrics port
 EXPOSE 9090/tcp
-# Health check port  
-EXPOSE 8080/tcp
+# HTTPS and plain HTTP
+EXPOSE 443/tcp
+EXPOSE 80/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:80/health || exit 1
 
 # Default command
 ENTRYPOINT ["./quic-proxy"]

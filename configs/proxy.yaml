@@ -1,96 +1,94 @@
+# Demo configuration used by docker-compose.yml.
+# Hostnames (backend1, backend2, ...) are docker-compose service names.
+
 server:
-  address: ":443"
+  address: ":443"            # UDP :443 for QUIC/HTTP-3, TCP :443 for HTTPS
+  fallback_address: ":80"    # plain HTTP, handy for local testing
   cert_file: "certs/server.crt"
   key_file: "certs/server.key"
-  fallback_address: ":80"
   quic:
-    max_streams: 1000
+    max_streams: 1000        # concurrent streams per QUIC connection
     idle_timeout: "30s"
     keep_alive: "15s"
     enable_0rtt: true
-    max_token_age: "24h"
-    congestion_algorithm: "cubic"
 
 backends:
+  # Two Node.js instances over HTTP/1.1; requests alternate between them
   - name: "api-service"
     targets:
-      - "http://backend1:80"
       - "http://backend2:3000"
-    health_check:
-      enabled: true
-      path: "/"
-      interval: "3s"
-      timeout: "2s"
-      healthy_threshold: 2
-      unhealthy_threshold: 2
+      - "http://backend3:3000"
     load_balancer: "round_robin"
-    weight: 1
     timeout: "10s"
-    retry_count: 3
-
-  - name: "web-service"
-    targets:
-      - "http://backend1:80"
     health_check:
       enabled: true
-      path: "/"
+      path: "/health"
       interval: "3s"
       timeout: "2s"
       healthy_threshold: 2
       unhealthy_threshold: 2
+
+  # Same two instances, but each client IP always lands on the same one
+  - name: "sticky-service"
+    targets:
+      - "http://backend2:3000"
+      - "http://backend3:3000"
+    load_balancer: "ip_hash"
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "3s"
+      timeout: "2s"
+      healthy_threshold: 2
+      unhealthy_threshold: 2
+
+  # Go HTTP/3 server: the proxy speaks QUIC on both sides
+  - name: "h3-service"
+    targets:
+      - "https://backend1:8081"
+    protocol: "h3"
+    tls_skip_verify: true    # backend1 uses a self-signed certificate
     load_balancer: "round_robin"
-    weight: 2
-    timeout: "15s"
-    retry_count: 2
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "3s"
+      timeout: "2s"
+      healthy_threshold: 2
+      unhealthy_threshold: 2
 
 routing:
   default_backend: "api-service"
   rules:
-    # API routes - goes to api-service (alternates between backend1:80 and backend2:3000)
+    # Highest priority wins
     - path: "/api/*"
       backend: "api-service"
       priority: 100
-      strip_prefix: false
       methods: ["GET", "POST", "PUT", "DELETE"]
 
-    # Health check routes
-    - path: "/health"
-      backend: "api-service"
+    # /sticky/api/status -> /api/status on the same instance every time
+    - path: "/sticky/*"
+      backend: "sticky-service"
       priority: 90
-
-    # Metrics route
-    - path: "/metrics"
-      backend: "api-service"
-      priority: 90
-
-    # Web routes - goes to web-service (only backend1:80)
-    - path: "/web/*"
-      backend: "web-service"
-      priority: 80
       strip_prefix: true
 
-    # Static files
-    - path: "/static/*"
-      backend: "web-service"
-      priority: 70
-
-    # Default catch-all route (lowest priority)
-    - path: "/*"
-      backend: "api-service"
-      priority: 1
+    # /h3/ -> / on the HTTP/3 backend
+    - path: "/h3/*"
+      backend: "h3-service"
+      priority: 90
+      strip_prefix: true
 
 telemetry:
   metrics:
     enabled: true
     port: 9090
     path: "/metrics"
-    collection_interval: "15s"
 
   tracing:
     enabled: true
-    endpoint: "http://localhost:14268/api/traces"
+    endpoint: "http://jaeger:14268/api/traces"
     service_name: "quic-reverse-proxy"
-    sample_rate: 0.1
+    sample_rate: 1.0         # trace every request in the demo
 
   logging:
     level: "info"
