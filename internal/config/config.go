@@ -192,6 +192,7 @@ func validate(cfg *Config) error {
 			"round_robin":       true,
 			"least_connections": true,
 			"weighted":          true,
+			"ip_hash":           true,
 		}
 		if !validLBMethods[backend.LoadBalancer] {
 			return fmt.Errorf("invalid load balancer method: %s", backend.LoadBalancer)

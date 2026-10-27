@@ -3,7 +3,9 @@ package proxy
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -13,6 +15,11 @@ import (
 	"github.com/os-dev/quic-reverse-proxy/internal/quic"
 	"github.com/os-dev/quic-reverse-proxy/internal/telemetry"
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Handler handles HTTP requests and forwards them to backend services
@@ -51,9 +58,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One span per proxied request; the context carries it to the backend call
+	ctx, span := telemetry.StartSpan(r.Context(), "proxy "+r.Method, trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+	r = r.WithContext(ctx)
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.target", r.URL.Path),
+		attribute.String("http.flavor", r.Proto),
+	)
+
 	// Route the request to find the appropriate backend config
 	backendConfig, err := h.router.Route(r)
 	if err != nil {
+		span.SetStatus(codes.Error, "no route")
 		h.handleError(w, r, fmt.Sprintf("routing error: %v", err), http.StatusNotFound)
 		return
 	}
@@ -69,11 +87,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get a healthy backend from the load balancer for this backend config
-	backend := h.loadBalancer.GetBackendForConfig(backendConfig.Name)
+	backend := h.loadBalancer.GetBackendForConfig(backendConfig.Name, r)
 	if backend == nil {
+		span.SetStatus(codes.Error, "no healthy backends")
 		h.handleError(w, r, "no healthy backends available", http.StatusServiceUnavailable)
 		return
 	}
+	span.SetAttributes(attribute.String("proxy.backend", backend.Name))
 
 	// Track active connections
 	backend.IncrementConnections()
@@ -94,6 +114,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Forward the request
 	proxy.ServeHTTP(wrapper, r)
+	span.SetAttributes(attribute.Int("http.status_code", wrapper.statusCode))
+	if wrapper.statusCode >= 500 {
+		span.SetStatus(codes.Error, http.StatusText(wrapper.statusCode))
+	}
 
 	// Record metrics
 	duration := time.Since(start)
@@ -128,7 +152,7 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 		// Modify the request as needed
 		req.Host = target.Host
 		req.URL.Host = target.Host
-		
+
 		// Map backend protocol to the correct scheme for the request
 		if backend.Protocol == "h3" || backend.Protocol == "https" {
 			req.URL.Scheme = "https"
@@ -141,6 +165,9 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 		// Add/modify headers
 		req.Header.Set("X-Forwarded-Proto", "https")
 		req.Header.Set("X-Forwarded-Port", "443")
+
+		// Pass the trace on to the backend as a W3C traceparent header
+		otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
 	}
 
 	// Customize error handler
@@ -150,11 +177,10 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 			"error":   err.Error(),
 			"url":     r.URL.String(),
 		}).Error("Backend request failed")
+		trace.SpanFromContext(r.Context()).RecordError(err)
 
-		// Mark backend as unhealthy if it's a connection error
-		if strings.Contains(err.Error(), "connection refused") ||
-			strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "timeout") {
+		// Passive health check: take the backend out of rotation right away
+		if isBackendDown(err) {
 			backend.SetHealthy(false)
 		}
 
@@ -185,17 +211,25 @@ func (h *Handler) createReverseProxy(backend *Backend) *httputil.ReverseProxy {
 	return proxy
 }
 
-// addProxyHeaders adds proxy-related headers to the request
-func (h *Handler) addProxyHeaders(r *http.Request) {
-	// Add X-Forwarded-For header
-	if clientIP := h.getClientIP(r); clientIP != "" {
-		if existing := r.Header.Get("X-Forwarded-For"); existing != "" {
-			r.Header.Set("X-Forwarded-For", existing+", "+clientIP)
-		} else {
-			r.Header.Set("X-Forwarded-For", clientIP)
-		}
+// isBackendDown reports whether a forwarding error means the backend itself is
+// unreachable (connection refused, DNS failure, timeout), as opposed to e.g. the
+// client cancelling. Checks error types, since messages differ per OS.
+func isBackendDown(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
 	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
 
+// addProxyHeaders adds proxy-related headers to the request.
+// X-Forwarded-For is appended by httputil.ReverseProxy itself.
+func (h *Handler) addProxyHeaders(r *http.Request) {
 	// Add X-Real-IP header
 	if clientIP := h.getClientIP(r); clientIP != "" {
 		r.Header.Set("X-Real-IP", clientIP)

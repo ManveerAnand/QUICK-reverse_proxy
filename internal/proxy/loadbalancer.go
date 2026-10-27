@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -10,6 +13,7 @@ import (
 	"time"
 
 	"github.com/os-dev/quic-reverse-proxy/internal/config"
+	"github.com/os-dev/quic-reverse-proxy/internal/quic"
 	"github.com/os-dev/quic-reverse-proxy/internal/telemetry"
 	"github.com/os-dev/quic-reverse-proxy/pkg/health"
 	"github.com/sirupsen/logrus"
@@ -22,10 +26,10 @@ type Backend struct {
 	Protocol      string
 	TLSSkipVerify bool
 	Weight        int
-	healthy     int32 // atomic bool
-	checker     *health.Checker
-	mu          sync.RWMutex
-	connections int32 // current connection count for least-connections LB
+	healthy       int32 // atomic bool
+	checker       *health.Checker
+	mu            sync.RWMutex
+	connections   int32 // current connection count for least-connections LB
 }
 
 // IsHealthy returns true if the backend is healthy
@@ -62,7 +66,8 @@ type LoadBalancer struct {
 	backends        []*Backend
 	backendsByName  map[string][]*Backend // Group backends by config name
 	algorithm       string
-	roundRobinIndex map[string]int32 // Per-backend-config round-robin index
+	algorithms      map[string]string  // Per-backend-config algorithm (load_balancer in YAML)
+	roundRobinIndex map[string]*uint32 // Per-backend-config round-robin counter
 	mu              sync.RWMutex
 	healthCheckers  map[string]*health.Checker
 	stopHealthCheck chan struct{}
@@ -78,7 +83,8 @@ func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics)
 	lb := &LoadBalancer{
 		backends:        make([]*Backend, 0, len(configs)),
 		backendsByName:  make(map[string][]*Backend),
-		roundRobinIndex: make(map[string]int32),
+		algorithms:      make(map[string]string),
+		roundRobinIndex: map[string]*uint32{"default": new(uint32)},
 		healthCheckers:  make(map[string]*health.Checker),
 		stopHealthCheck: make(chan struct{}),
 		metrics:         metrics,
@@ -107,12 +113,7 @@ func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics)
 
 			// Create health checker if enabled
 			if cfg.HealthCheck.Enabled {
-				checker := health.NewChecker(target, cfg.HealthCheck.Path, health.Config{
-					Interval:           cfg.HealthCheck.Interval,
-					Timeout:            cfg.HealthCheck.Timeout,
-					HealthyThreshold:   cfg.HealthCheck.HealthyThreshold,
-					UnhealthyThreshold: cfg.HealthCheck.UnhealthyThreshold,
-				})
+				checker := newHealthChecker(cfg, target)
 				backend.checker = checker
 				lb.healthCheckers[backend.Name] = checker
 			}
@@ -123,10 +124,10 @@ func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics)
 
 		// Group backends by config name
 		lb.backendsByName[cfg.Name] = configBackends
-		lb.roundRobinIndex[cfg.Name] = 0
+		lb.algorithms[cfg.Name] = cfg.LoadBalancer
+		lb.roundRobinIndex[cfg.Name] = new(uint32)
 
-		// Use the load balancer algorithm from the first backend config
-		// (in a real implementation, you might want this at the global level)
+		// Fallback algorithm for GetBackend, which is not tied to a backend config
 		if lb.algorithm == "" {
 			lb.algorithm = cfg.LoadBalancer
 		}
@@ -140,14 +141,42 @@ func NewLoadBalancer(configs []config.BackendConfig, metrics *telemetry.Metrics)
 	return lb, nil
 }
 
+// newHealthChecker builds an active health checker that probes the backend
+// over the same protocol the proxy uses to forward to it
+func newHealthChecker(cfg config.BackendConfig, target string) *health.Checker {
+	var transport http.RoundTripper
+	switch {
+	case cfg.Protocol == "h3":
+		transport = quic.NewRoundTripper(cfg.TLSSkipVerify)
+	case cfg.TLSSkipVerify:
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport = t
+	}
+
+	return health.NewChecker(target, cfg.HealthCheck.Path, health.Config{
+		Interval:           cfg.HealthCheck.Interval,
+		Timeout:            cfg.HealthCheck.Timeout,
+		HealthyThreshold:   cfg.HealthCheck.HealthyThreshold,
+		UnhealthyThreshold: cfg.HealthCheck.UnhealthyThreshold,
+		Transport:          transport,
+	})
+}
+
 // GetBackendForConfig selects a backend for a specific backend config name
-func (lb *LoadBalancer) GetBackendForConfig(configName string) *Backend {
+func (lb *LoadBalancer) GetBackendForConfig(configName string, r *http.Request) *Backend {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
 	backends, ok := lb.backendsByName[configName]
 	if !ok || len(backends) == 0 {
 		return nil
+	}
+
+	// ip_hash hashes over the full pool (not just healthy ones) so a client only
+	// moves to another backend when its own backend goes down
+	if lb.algorithms[configName] == "ip_hash" {
+		return lb.ipHash(r, backends)
 	}
 
 	healthyBackends := make([]*Backend, 0, len(backends))
@@ -161,7 +190,7 @@ func (lb *LoadBalancer) GetBackendForConfig(configName string) *Backend {
 		return nil
 	}
 
-	switch lb.algorithm {
+	switch lb.algorithms[configName] {
 	case "round_robin":
 		return lb.roundRobinForConfig(configName, healthyBackends)
 	case "least_connections":
@@ -177,6 +206,10 @@ func (lb *LoadBalancer) GetBackendForConfig(configName string) *Backend {
 func (lb *LoadBalancer) GetBackend(r *http.Request) *Backend {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
+
+	if lb.algorithm == "ip_hash" {
+		return lb.ipHash(r, lb.backends)
+	}
 
 	healthyBackends := lb.getHealthyBackends()
 	if len(healthyBackends) == 0 {
@@ -212,27 +245,15 @@ func (lb *LoadBalancer) roundRobinForConfig(configName string, backends []*Backe
 		return nil
 	}
 
-	// Get current index for this config
-	currentIndex, ok := lb.roundRobinIndex[configName]
+	// Callers only hold the read lock, so the map itself is never written here;
+	// each pool's counter is a pointer that is advanced atomically.
+	counter, ok := lb.roundRobinIndex[configName]
 	if !ok {
-		currentIndex = 0
+		return backends[0]
 	}
 
-	next := atomic.AddInt32(&currentIndex, 1)
-	index := int(next-1) % len(backends)
-	backend := backends[index]
-
-	// Update the index
-	lb.roundRobinIndex[configName] = next
-
-	backend.IncrementConnections()
-	go func() {
-		// Simulate connection cleanup after request
-		time.Sleep(100 * time.Millisecond)
-		backend.DecrementConnections()
-	}()
-
-	return backend
+	next := atomic.AddUint32(counter, 1)
+	return backends[int((next-1)%uint32(len(backends)))]
 }
 
 // roundRobin implements round-robin load balancing (deprecated, use roundRobinForConfig)
@@ -257,16 +278,37 @@ func (lb *LoadBalancer) leastConnections(backends []*Backend) *Backend {
 		}
 	}
 
-	if selected != nil {
-		selected.IncrementConnections()
-		go func() {
-			// Simulate connection cleanup after request
-			time.Sleep(100 * time.Millisecond)
-			selected.DecrementConnections()
-		}()
+	// The handler increments/decrements the count around the real request
+	return selected
+}
+
+// ipHash implements IP-hash load balancing: the same client IP always maps to
+// the same backend (sticky sessions without cookies). If that backend is
+// unhealthy, it walks forward to the next healthy one.
+func (lb *LoadBalancer) ipHash(r *http.Request, backends []*Backend) *Backend {
+	if len(backends) == 0 {
+		return nil
 	}
 
-	return selected
+	// RemoteAddr is "ip:port"; the port changes per connection, so hash only the IP.
+	// X-Forwarded-For is not used because clients can set it to anything.
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = host
+	}
+
+	h := fnv.New32a()
+	h.Write([]byte(ip))
+	start := int(h.Sum32() % uint32(len(backends)))
+
+	for i := 0; i < len(backends); i++ {
+		backend := backends[(start+i)%len(backends)]
+		if backend.IsHealthy() {
+			return backend
+		}
+	}
+
+	return nil
 }
 
 // weighted implements weighted load balancing
@@ -293,12 +335,6 @@ func (lb *LoadBalancer) weighted(backends []*Backend) *Backend {
 	for _, backend := range backends {
 		currentWeight += backend.Weight
 		if random < currentWeight {
-			backend.IncrementConnections()
-			go func() {
-				// Simulate connection cleanup after request
-				time.Sleep(100 * time.Millisecond)
-				backend.DecrementConnections()
-			}()
 			return backend
 		}
 	}
@@ -368,7 +404,8 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 	// Clear existing backends
 	lb.backends = lb.backends[:0]
 	lb.backendsByName = make(map[string][]*Backend)
-	lb.roundRobinIndex = make(map[string]int32)
+	lb.algorithms = make(map[string]string)
+	lb.roundRobinIndex = map[string]*uint32{"default": new(uint32)}
 	lb.healthCheckers = make(map[string]*health.Checker)
 	lb.stopHealthCheck = make(chan struct{})
 
@@ -392,12 +429,7 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 			backend.SetHealthy(true)
 
 			if cfg.HealthCheck.Enabled {
-				checker := health.NewChecker(target, cfg.HealthCheck.Path, health.Config{
-					Interval:           cfg.HealthCheck.Interval,
-					Timeout:            cfg.HealthCheck.Timeout,
-					HealthyThreshold:   cfg.HealthCheck.HealthyThreshold,
-					UnhealthyThreshold: cfg.HealthCheck.UnhealthyThreshold,
-				})
+				checker := newHealthChecker(cfg, target)
 				backend.checker = checker
 				lb.healthCheckers[backend.Name] = checker
 			}
@@ -407,7 +439,8 @@ func (lb *LoadBalancer) UpdateBackends(configs []config.BackendConfig) error {
 		}
 
 		lb.backendsByName[cfg.Name] = configBackends
-		lb.roundRobinIndex[cfg.Name] = 0
+		lb.algorithms[cfg.Name] = cfg.LoadBalancer
+		lb.roundRobinIndex[cfg.Name] = new(uint32)
 	}
 
 	// Restart health checks

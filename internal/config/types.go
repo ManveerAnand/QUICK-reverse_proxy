@@ -38,7 +38,7 @@ type BackendConfig struct {
 	Protocol      string            `yaml:"protocol,omitempty"` // "http", "https", "h3"
 	TLSSkipVerify bool              `yaml:"tls_skip_verify,omitempty"`
 	HealthCheck   HealthCheckConfig `yaml:"health_check"`
-	LoadBalancer  string            `yaml:"load_balancer"` // "round_robin", "least_connections", "weighted"
+	LoadBalancer  string            `yaml:"load_balancer"` // "round_robin", "least_connections", "weighted", "ip_hash"
 	Weight        int               `yaml:"weight,omitempty"`
 	Timeout       time.Duration     `yaml:"timeout,omitempty"`
 	RetryCount    int               `yaml:"retry_count,omitempty"`

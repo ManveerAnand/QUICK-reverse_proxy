@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
@@ -98,8 +99,10 @@ func initTracing(cfg config.TracingConfig) (*tracesdk.TracerProvider, error) {
 		tracesdk.WithSampler(tracesdk.TraceIDRatioBased(cfg.SampleRate)),
 	)
 
-	// Set global tracer provider
+	// Set global tracer provider, and use W3C traceparent headers so traces
+	// continue into backends that are also instrumented
 	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	logrus.WithFields(logrus.Fields{
 		"endpoint":     cfg.Endpoint,

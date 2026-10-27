@@ -83,11 +83,15 @@ func (s *Server) Start(handler http.Handler) error {
 	// Set the handler
 	s.server.Handler = s.wrapHandler(handler)
 
-	// Set up connection callbacks for telemetry
-	s.server.QuicConfig.GetConfigForClient = s.getConfigForClient
-
 	// Start listening
 	return s.server.Serve(s.listener)
+}
+
+// SetQuicHeaders adds an Alt-Svc header (e.g. h3=":443"; ma=2592000) telling
+// clients this server also speaks HTTP/3. Returns an error until the QUIC
+// listener is running.
+func (s *Server) SetQuicHeaders(hdr http.Header) error {
+	return s.server.SetQuicHeaders(hdr)
 }
 
 // Shutdown gracefully shuts down the QUIC server
@@ -151,26 +155,6 @@ func (s *Server) wrapHandler(handler http.Handler) http.Handler {
 			"protocol":    r.Proto,
 		}).Info("HTTP request processed")
 	})
-}
-
-// getConfigForClient returns QUIC configuration for incoming connections
-func (s *Server) getConfigForClient(info *quic.ClientHelloInfo) (*quic.Config, error) {
-	// Record handshake metrics
-	if s.metrics != nil {
-		// This is a simplified approach - in a real implementation,
-		// you'd capture actual handshake timing and details
-		go func() {
-			time.Sleep(time.Millisecond) // Simulate handshake time
-			s.metrics.RecordHandshake(
-				time.Millisecond*10,      // Simulated handshake duration
-				"TLS_AES_128_GCM_SHA256", // Would be actual cipher suite
-				"QUICv1",                 // Would be actual QUIC version
-				false,                    // Would check if 0-RTT was used
-			)
-		}()
-	}
-
-	return s.server.QuicConfig, nil
 }
 
 // extractConnectionID extracts connection ID from request context

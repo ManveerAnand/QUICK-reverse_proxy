@@ -15,6 +15,9 @@ type Config struct {
 	Timeout            time.Duration
 	HealthyThreshold   int
 	UnhealthyThreshold int
+	// Transport is used for probes; nil means plain HTTP(S) over TCP.
+	// HTTP/3-only backends need an http3 RoundTripper here.
+	Transport http.RoundTripper
 }
 
 // Checker performs health checks on backend services
@@ -47,7 +50,8 @@ func NewChecker(baseURL, path string, config Config) *Checker {
 
 	// Create HTTP client with timeout
 	client := &http.Client{
-		Timeout: config.Timeout,
+		Timeout:   config.Timeout,
+		Transport: config.Transport,
 		// Don't follow redirects for health checks
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse

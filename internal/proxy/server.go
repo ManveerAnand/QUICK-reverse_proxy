@@ -56,10 +56,12 @@ func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Create HTTPS server on port 443 (for browser compatibility)
+	// Create HTTPS server on port 443 (for browser compatibility). Browsers
+	// always connect over TCP first; the Alt-Svc header tells them to switch
+	// to HTTP/3 over UDP on later requests.
 	httpsServer := &http.Server{
 		Addr:         cfg.Server.Address,
-		Handler:      handler,
+		Handler:      advertiseHTTP3(quicServer, handler),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -75,6 +77,16 @@ func NewServer(cfg *config.Config, telemetryManager *telemetry.Manager) (*Server
 		telemetry:    telemetryManager,
 		loadBalancer: loadBalancer,
 	}, nil
+}
+
+// advertiseHTTP3 adds an Alt-Svc header to every TCP response so browsers
+// upgrade to HTTP/3. If the QUIC listener isn't up yet, the header is skipped
+// and the request is still served over TCP.
+func advertiseHTTP3(quicServer *quic.Server, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = quicServer.SetQuicHeaders(w.Header())
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Start starts the reverse proxy server
